@@ -60,6 +60,40 @@ pub fn num(number: var) getNumReturnType(@TypeOf(number)) {
     return getNumReturnType(@TypeOf(number)){ .v = number };
 }
 
+pub fn typePrint(comptime Type: type) []const u8 {
+    const indent = [_]u8{0};
+    const ti = @typeInfo(Type);
+    return switch (ti) {
+        .Struct => |stru| blk: {
+            var res: []const u8 = "struct {";
+            const newline = "\n" ++ (indent ** indentationLevel);
+            for (stru.fields) |field| {
+                res = res ++ newline ++ indent ++ field.name ++ ": " ++ typePrint(field.field_type, indentationLevel + 1) ++ ",";
+            }
+            for (stru.decls) |decl| {
+                res = res ++ newline ++ indent ++ "const " ++ decl.name ++ ";";
+            }
+            res = res ++ newline ++ "}";
+            break :blk res;
+        },
+        else => @typeName(Type),
+    };
+}
+
+fn getTypReturnType(comptime Type: type) type {
+    const ti = @typeInfo(Type);
+    return struct {
+        // should formatOverride be given an indentation level/var printIndent arg?
+        pub fn formatOverride(me: @This(), out: var, comptime depth: usize) !void {
+            try fmt(out, typePrint(Type), 0);
+        }
+    };
+}
+
+pub fn typ(comptime Type: var) getTypReturnType(Type) {
+    return getTypReturnType(Type){};
+}
+
 pub fn warn(args: var) void {
     const held = std.debug.getStderrMutex().acquire();
     defer held.release();
@@ -71,6 +105,7 @@ pub fn main() !void {
     warn(.{"Warn testing!\n"});
     warn(.{ "My number is: ", num(@as(u64, 25)), "\n" });
     warn(.{ "My float is: ", num(@as(f64, 554.32)), "\n" });
+    warn(.{ "My type is: ", typ(u32), "\n" });
     // const max = 25;
     // var load = 0;
     // while (load <= max) : (load += 1) {

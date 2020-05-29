@@ -36,7 +36,13 @@ pub fn fmt(out: var, args: var, comptime depth: usize) @TypeOf(out).Child.Error!
         if ((ti != .Struct and ti != .Enum and ti != .Union) or !@hasDecl(Arg, "formatOverride")) {
             @compileError("For non-strings, use a helper function eg fmt.num or fmt.structt. Expected []const u8/struct/enum/union, got " ++ @typeName(Arg));
         }
-        try arg.formatOverride(out, depth + 1);
+        const outerFmt = fmt;
+        try arg.formatOverride(struct {
+            out: @TypeOf(out),
+            pub fn fmt(me: @This(), fmtargs: var) !void {
+                try outerFmt(me.out, fmtargs, depth + 1);
+            }
+        }{ .out = out });
     }
 }
 
@@ -45,11 +51,11 @@ fn getNumReturnType(comptime NumType: type) type {
     const F = std.fmt.FormatOptions;
     return struct {
         v: NumType,
-        pub fn formatOverride(me: @This(), out: var, comptime depth: usize) !void {
+        pub fn formatOverride(me: @This(), print: var) !void {
             switch (ti) {
-                .Float => try std.fmt.formatFloatDecimal(me.v, F{}, out),
-                .Int, .ComptimeInt => try std.fmt.formatInt(me.v, 10, false, F{}, out),
-                else => try fmt(out, "[number]", 0),
+                .Float => try std.fmt.formatFloatDecimal(me.v, F{}, print.out),
+                .Int, .ComptimeInt => try std.fmt.formatInt(me.v, 10, false, F{}, print.out),
+                else => @compileError("not supported number: " ++ @typeName(NumType)),
             }
         }
     };
@@ -84,8 +90,8 @@ fn getTypReturnType(comptime Type: type) type {
     const ti = @typeInfo(Type);
     return struct {
         // should formatOverride be given an indentation level/var printIndent arg?
-        pub fn formatOverride(me: @This(), out: var, comptime depth: usize) !void {
-            try fmt(out, typePrint(Type), 0);
+        pub fn formatOverride(me: @This(), print: var) !void {
+            try print.fmt(typePrint(Type));
         }
     };
 }

@@ -12,15 +12,19 @@ pub fn isString(comptime SomeT: type) bool {
     return false;
 }
 
-pub fn fmt(out: var, args: var, comptime depth: usize) @TypeOf(out).Child.Error!void {
+pub fn internalFmt(
+    out: var,
+    args: var,
+    comptime depth: usize,
+) @TypeOf(out).Child.Error!void {
     if (depth > 5) {
         try out.writeAll("...");
         return;
     }
     const Args = unwrapPtr(@TypeOf(args));
-    if (comptime isString(Args)) return fmt(out, .{args}, depth);
+    if (comptime isString(Args)) return internalFmt(out, .{args}, depth);
     if (@typeInfo(Args) != .Struct) {
-        @compileError("Expected tuple or struct, got " ++ @typeName(Args));
+        @compileError("Expected tuple, got " ++ @typeName(Args));
     }
 
     inline for (@typeInfo(Args).Struct.fields) |field| {
@@ -36,14 +40,16 @@ pub fn fmt(out: var, args: var, comptime depth: usize) @TypeOf(out).Child.Error!
         if ((ti != .Struct and ti != .Enum and ti != .Union) or !@hasDecl(Arg, "formatOverride")) {
             @compileError("For non-strings, use a helper function eg fmt.num or fmt.structt. Expected []const u8/struct/enum/union, got " ++ @typeName(Arg));
         }
-        const outerFmt = fmt;
         try arg.formatOverride(struct {
             out: @TypeOf(out),
             pub fn fmt(me: @This(), fmtargs: var) !void {
-                try outerFmt(me.out, fmtargs, depth + 1);
+                try internalFmt(me.out, fmtargs, depth + 1);
             }
         }{ .out = out });
     }
+}
+pub fn fmt(out: var, args: var) !void {
+    try internalFmt(out, args, 0);
 }
 
 fn getNumReturnType(comptime NumType: type) type {
@@ -104,14 +110,50 @@ pub fn warn(args: var) void {
     const held = std.debug.getStderrMutex().acquire();
     defer held.release();
     const stderr = std.debug.getStderrStream();
-    noasync fmt(stderr, args, 0) catch return;
+    noasync fmt(stderr, args) catch return;
+}
+
+pub const BufPrintError = error{NoSpaceLeft};
+pub fn bufPrint(buf: []u8, args: var) BufPrintError![]u8 {
+    var fbs = std.io.fixedBufferStream(buf);
+    try fmt(&fbs.outStream(), args);
+    return fbs.getWritten();
+}
+/// note that counting before printing generates double the
+/// binary size because all printing has to be done twice.
+pub fn count(args: var) u64 {
+    var counting_stream = std.io.countingOutStream(std.io.null_out_stream);
+    fmt(&counting_stream.outStream(), args) catch |err| switch (err) {};
+    return counting_stream.bytes_written;
+}
+pub const AllocPrintError = error{OutOfMemory};
+pub fn allocPrint(allocator: *mem.Allocator, args: var) AllocPrintError![]u8 {
+    const size = math.cast(usize, count(args)) catch |err| switch (err) {
+        error.Overflow => return error.OutOfMemory,
+    };
+    const buf = try allocator.alloc(u8, size);
+    return bufPrint(buf, args) catch |err| switch (err) {
+        error.NoSpaceLeft => unreachable, // we just counted the size above
+    };
+}
+pub fn allocPrint0(allocator: *mem.Allocator, args: var) AllocPrintError![:0]u8 {
+    const result = try allocPrint(allocator, args ++ .{"\x00"});
+    return result[0 .. result.len - 1 :0];
+}
+pub fn comptimeFmt(comptime args: var) []const u8 {
+    comptime {
+        const width = count(args);
+        var buf: [width]u8 = undefined;
+        return bufPrint(&buf, args) catch unreachable;
+    }
 }
 
 pub fn main() !void {
-    warn(.{"Warn testing!\n"});
+    warn("Warn testing!\n");
     warn(.{ "My number is: ", num(@as(u64, 25)), "\n" });
     warn(.{ "My float is: ", num(@as(f64, 554.32)), "\n" });
     warn(.{ "My type is: ", typ(u32), "\n" });
+    warn(.{ comptime comptimeFmt(.{num(@as(u64, 25))}), "\n" });
     // const max = 25;
     // var load = 0;
     // while (load <= max) : (load += 1) {
